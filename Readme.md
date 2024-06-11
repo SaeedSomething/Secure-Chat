@@ -9,8 +9,8 @@ This application supports private chat and group chat.
 
 ## **Private**  
 
-![Private Chat Senario](_etc\p2p_senario.png)
+![Private Chat Senario](_etc/p2p_senario.png)
 
 ## **Group**  
 
-![Group Chat Senario](_etc\grp_senario.png)
+![Group Chat Senario](_etc/grp_senario.png)
