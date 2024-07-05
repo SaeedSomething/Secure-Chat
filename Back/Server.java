@@ -1,82 +1,107 @@
 import com.sun.net.httpserver.HttpServer;
 import com.sun.net.httpserver.HttpHandler;
 import com.sun.net.httpserver.HttpExchange;
+
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.SecureRandom;
-import java.security.spec.X509EncodedKeySpec;
+import java.security.Key;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.NoSuchAlgorithmException;
 import java.util.Base64;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+
 import javax.crypto.KeyGenerator;
 import javax.crypto.SecretKey;
 
 public class Server {
-
     public static void main(String[] args) throws Exception {
         HttpServer server = HttpServer.create(new InetSocketAddress(8000), 0);
         server.createContext("/signup", new SignUpHandler());
         server.createContext("/login", new LoginHandler());
-        ExecutorService executor = Executors.newFixedThreadPool(10);
-        server.setExecutor(executor);
+        server.setExecutor(null); // creates a default executor
         server.start();
         System.out.println("HTTP Server started on port 8000");
 
-        // Start WebSocket server in a separate thread
-        Thread wsThread = new Thread(() -> {
+        // Start WebSocket server on a separate thread
+        new Thread(() -> {
             try {
-                WebSocketServer wsServer = new WebSocketServer(9000);
+                ChatWebSocketServer wsServer = new ChatWebSocketServer(9000);
                 wsServer.start();
+                System.out.println("WebSocket Server started on port 9000");
             } catch (Exception e) {
                 e.printStackTrace();
             }
-        });
-        wsThread.start();
+        }).start();
     }
 
     static class SignUpHandler implements HttpHandler {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
             if ("POST".equals(exchange.getRequestMethod())) {
-                byte[] requestBody = exchange.getRequestBody().readAllBytes();
-                String requestBodyStr = new String(requestBody, StandardCharsets.UTF_8);
-                String[] params = requestBodyStr.split("&");
-                String username = params[0].split("=")[1];
-                String password = params[1].split("=")[1];
-                String email = params[2].split("=")[1];
-                String ip = params[3].split("=")[1];
-                byte[] publicKeyBytes = Base64.getDecoder().decode(params[4].split("=")[1]);
+                String requestBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                String[] params = requestBody.split("&");
 
-                try {
-                    // Generate a symmetric key
-                    KeyGenerator keyGen = KeyGenerator.getInstance("AES");
-                    keyGen.init(256);
-                    SecretKey secretKey = keyGen.generateKey();
-                    byte[] keyBytes = secretKey.getEncoded();
-                    String symmetricKeyBase64 = Base64.getEncoder().encodeToString(keyBytes);
+                String username = null;
+                String password = null;
+                String email = null;
+                String ip = null;
+                String publicKey = null;
 
-                    // Add user to database
-                    DataBaseHandler.addUser(username, password, email, ip, publicKeyBytes, keyBytes);
+                for (String param : params) {
+                    String[] keyValue = param.split("=");
+                    switch (keyValue[0]) {
+                        case "username":
+                            username = keyValue[1];
+                            break;
+                        case "password":
+                            password = keyValue[1];
+                            break;
+                        case "email":
+                            email = keyValue[1];
+                            break;
+                        case "ip":
+                            ip = keyValue[1];
+                            break;
+                        case "publickey":
+                            publicKey = keyValue[1];
+                            break;
+                    }
+                }
 
-                    // Send the key to the user
-                    String response = "User registered successfully! Symmetric Key: " + symmetricKeyBase64;
-                    exchange.sendResponseHeaders(200, response.length());
-                    OutputStream os = exchange.getResponseBody();
-                    os.write(response.getBytes());
-                    os.close();
-                } catch (Exception e) {
-                    e.printStackTrace();
-                    String response = "Error: " + e.getMessage();
-                    exchange.sendResponseHeaders(500, response.length());
+                if (username != null && password != null && email != null && ip != null && publicKey != null) {
+                    try {
+                        // Generate symmetric key
+                        KeyGenerator keyGen = KeyGenerator.getInstance("AES");
+                        keyGen.init(256);
+                        SecretKey symKey = keyGen.generateKey();
+                        String symKeyString = Base64.getEncoder().encodeToString(symKey.getEncoded());
+
+                        DataBaseHandler.addUser(username, password, email, ip, publicKey, symKeyString);
+
+                        String response = "User registered successfully. Symmetric key: " + symKeyString;
+                        exchange.sendResponseHeaders(200, response.length());
+                        OutputStream os = exchange.getResponseBody();
+                        os.write(response.getBytes());
+                        os.close();
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        String response = "Error: " + e.getMessage();
+                        exchange.sendResponseHeaders(500, response.length());
+                        OutputStream os = exchange.getResponseBody();
+                        os.write(response.getBytes());
+                        os.close();
+                    }
+                } else {
+                    String response = "Error: Missing parameters";
+                    exchange.sendResponseHeaders(400, response.length());
                     OutputStream os = exchange.getResponseBody();
                     os.write(response.getBytes());
                     os.close();
                 }
             } else {
-                exchange.sendResponseHeaders(405, -1); // Method Not Allowed
+                exchange.sendResponseHeaders(405, -1); // Method not allowed
             }
         }
     }
@@ -85,35 +110,50 @@ public class Server {
         @Override
         public void handle(HttpExchange exchange) throws IOException {
             if ("POST".equals(exchange.getRequestMethod())) {
-                byte[] requestBody = exchange.getRequestBody().readAllBytes();
-                String requestBodyStr = new String(requestBody, StandardCharsets.UTF_8);
-                String[] params = requestBodyStr.split("&");
-                String username = params[0].split("=")[1];
-                String password = params[1].split("=")[1];
+                String requestBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                String[] params = requestBody.split("&");
 
-                try {
-                    boolean authenticated = DataBaseHandler.authenticateUser(username, password);
-                    String response;
-                    if (authenticated) {
-                        response = "User authenticated successfully!";
-                        exchange.sendResponseHeaders(200, response.length());
-                    } else {
-                        response = "Authentication failed!";
-                        exchange.sendResponseHeaders(401, response.length());
+                String username = null;
+                String password = null;
+
+                for (String param : params) {
+                    String[] keyValue = param.split("=");
+                    switch (keyValue[0]) {
+                        case "username":
+                            username = keyValue[1];
+                            break;
+                        case "password":
+                            password = keyValue[1];
+                            break;
                     }
-                    OutputStream os = exchange.getResponseBody();
-                    os.write(response.getBytes());
-                    os.close();
-                } catch (Exception e) {
-                    e.printStackTrace();
-                    String response = "Error: " + e.getMessage();
-                    exchange.sendResponseHeaders(500, response.length());
+                }
+
+                if (username != null && password != null) {
+                    try {
+                        boolean isValidUser = DataBaseHandler.verifyUser(username, password);
+
+                        String response = isValidUser ? "Login successful" : "Invalid username or password";
+                        exchange.sendResponseHeaders(isValidUser ? 200 : 401, response.length());
+                        OutputStream os = exchange.getResponseBody();
+                        os.write(response.getBytes());
+                        os.close();
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                        String response = "Error: " + e.getMessage();
+                        exchange.sendResponseHeaders(500, response.length());
+                        OutputStream os = exchange.getResponseBody();
+                        os.write(response.getBytes());
+                        os.close();
+                    }
+                } else {
+                    String response = "Error: Missing parameters";
+                    exchange.sendResponseHeaders(400, response.length());
                     OutputStream os = exchange.getResponseBody();
                     os.write(response.getBytes());
                     os.close();
                 }
             } else {
-                exchange.sendResponseHeaders(405, -1); // Method Not Allowed
+                exchange.sendResponseHeaders(405, -1); // Method not allowed
             }
         }
     }
