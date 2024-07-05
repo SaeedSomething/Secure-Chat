@@ -24,6 +24,24 @@ public class DataBaseHandler {
     // e.printStackTrace();
     // }
     // }
+    public static String getPublicKey(String username) throws Exception {
+        Connection con = DriverManager.getConnection(DB_URL, DB_USERNAME, DB_PASSWORD);
+
+        try {
+            String selectSQL = "SELECT publickey FROM \"user\" WHERE username = ?";
+            PreparedStatement ps = con.prepareStatement(selectSQL);
+            ps.setString(1, username);
+            ResultSet rs = ps.executeQuery();
+
+            if (rs.next()) {
+                return rs.getString("publickey");
+            } else {
+                return null;
+            }
+        } finally {
+            con.close();
+        }
+    }
 
     public static void updateUserRoles(boolean[] roles, String username) throws Exception {
         if (roles.length != 2) {

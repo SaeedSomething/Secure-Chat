@@ -14,127 +14,44 @@ public class ChatWebSocketServer extends WebSocketServer {
 
     private static final int KEY_SIZE = 2048;
 
-    // Store client public keys and WebSocket connections
-    private ConcurrentHashMap<String, PublicKey> clientPublicKeys = new ConcurrentHashMap<>();
-    private ConcurrentHashMap<String, WebSocket> clientConnections = new ConcurrentHashMap<>();
-
-    private KeyPair serverKeyPair;
-
-    public ChatWebSocketServer(int port) throws Exception {
+    public ChatWebSocketServer(int port) {
         super(new InetSocketAddress(port));
-        this.serverKeyPair = generateKeyPair();
-    }
-
-    // Generates a pair of RSA keys
-    public static KeyPair generateKeyPair() throws Exception {
-        KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
-        generator.initialize(KEY_SIZE);
-        return generator.generateKeyPair();
-    }
-
-    // Encrypts a message with a given public key
-    public static String encrypt(String message, PublicKey key) throws Exception {
-        Cipher cipher = Cipher.getInstance("RSA");
-        cipher.init(Cipher.ENCRYPT_MODE, key);
-        return Base64.getEncoder().encodeToString(cipher.doFinal(message.getBytes()));
-    }
-
-    // Decrypts a message with a given private key
-    public static String decrypt(String message, PrivateKey key) throws Exception {
-        Cipher cipher = Cipher.getInstance("RSA");
-        cipher.init(Cipher.DECRYPT_MODE, key);
-        return new String(cipher.doFinal(Base64.getDecoder().decode(message)));
-    }
-
-    // Signs a message with a given private key
-    public static String sign(String message, PrivateKey key) throws Exception {
-        Signature signature = Signature.getInstance("SHA256withRSA");
-        signature.initSign(key);
-        signature.update(message.getBytes());
-        return Base64.getEncoder().encodeToString(signature.sign());
-    }
-
-    // Verifies a message signature with a given public key
-    public static boolean verify(String message, String signatureStr, PublicKey key) throws Exception {
-        Signature signature = Signature.getInstance("SHA256withRSA");
-        signature.initVerify(key);
-        signature.update(message.getBytes());
-        byte[] signatureBytes = Base64.getDecoder().decode(signatureStr);
-        return signature.verify(signatureBytes);
     }
 
     @Override
     public void onOpen(WebSocket conn, ClientHandshake handshake) {
-        System.out.println("New connection from " + conn.getRemoteSocketAddress().getAddress().getHostAddress());
+        System.out.println("New connection: " + conn.getRemoteSocketAddress());
     }
 
     @Override
     public void onClose(WebSocket conn, int code, String reason, boolean remote) {
-        System.out.println("Closed connection to " + conn.getRemoteSocketAddress().getAddress().getHostAddress());
-        // Remove the client from the maps
-        clientPublicKeys.entrySet().removeIf(entry -> entry.getValue().equals(conn));
-        clientConnections.entrySet().removeIf(entry -> entry.getValue().equals(conn));
+        System.out.println("Closed connection: " + conn.getRemoteSocketAddress());
     }
 
     @Override
     public void onMessage(WebSocket conn, String message) {
-        try {
-            String clientAddress = conn.getRemoteSocketAddress().getAddress().getHostAddress();
+        System.out.println("Message from " + conn.getRemoteSocketAddress() + ": " + message);
 
-            // Assuming message format: "REGISTER:<client_id>:<base64_public_key>" for public key registration
-            if (message.startsWith("REGISTER:")) {
-                String[] parts = message.split(":");
-                String clientId = parts[1];
-                String publicKeyBase64 = parts[2];
-                byte[] publicKeyBytes = Base64.getDecoder().decode(publicKeyBase64);
-                PublicKey clientPublicKey = KeyFactory.getInstance("RSA").generatePublic(new X509EncodedKeySpec(publicKeyBytes));
-                clientPublicKeys.put(clientId, clientPublicKey);
-                clientConnections.put(clientId, conn);
-                System.out.println("Registered public key for " + clientId + " from " + clientAddress);
-                return;
-            }
-
-            // Assuming message format: "GET_PUBLIC_KEY:<client_id>"
-            if (message.startsWith("GET_PUBLIC_KEY:")) {
-                String clientId = message.split(":")[1];
-                PublicKey publicKey = clientPublicKeys.get(clientId);
+        if (message.startsWith("REQUEST_PUBLIC_KEY:")) {
+            String username = message.substring("REQUEST_PUBLIC_KEY:".length());
+            try {
+                String publicKey = DataBaseHandler.getPublicKey(username);
                 if (publicKey != null) {
-                    String publicKeyBase64 = Base64.getEncoder().encodeToString(publicKey.getEncoded());
-                    conn.send("PUBLIC_KEY:" + publicKeyBase64);
+                    String signedPublicKey = Server.signData(publicKey, Server.serverKeyPair.getPrivate());
+                    conn.send("PUBLIC_KEY:" + publicKey + "." + signedPublicKey);
                 } else {
-                    conn.send("ERROR: Client ID not found");
+                    conn.send("ERROR: User not found");
                 }
-                return;
+            } catch (Exception e) {
+                conn.send("ERROR: " + e.getMessage());
             }
-
-            // Assuming message format: "MESSAGE:<from_client_id>:<to_client_id>:<base64_encrypted_message>:<base64_signature>"
-            if (message.startsWith("MESSAGE:")) {
-                String[] parts = message.split(":");
-                String fromClientId = parts[1];
-                String toClientId = parts[2];
-                String encryptedMessageBase64 = parts[3];
-                String signatureBase64 = parts[4];
-
-                // Get the recipient's WebSocket connection
-                WebSocket recipientConn = clientConnections.get(toClientId);
-                if (recipientConn != null) {
-                    // Forward the message to the recipient
-                    recipientConn.send("MESSAGE:" + fromClientId + ":" + encryptedMessageBase64 + ":" + signatureBase64);
-                } else {
-                    conn.send("ERROR: Recipient not connected");
+        } else if (message.startsWith("MESSAGE:")) {
+            for (WebSocket client : getConnections()) {
+                if (client != conn) {
+                    client.send(message);
                 }
-                return;
             }
-
-        } catch (Exception e) {
-            e.printStackTrace();
         }
-    }
-
-    @Override
-    public void onMessage(WebSocket conn, ByteBuffer message) {
-        System.out.println("Binary message from " + conn.getRemoteSocketAddress().getAddress().getHostAddress());
-        conn.send(message);
     }
 
     @Override
@@ -144,13 +61,6 @@ public class ChatWebSocketServer extends WebSocketServer {
 
     @Override
     public void onStart() {
-        System.out.println("WebSocket server started on port: " + getPort());
-    }
-
-    public static void main(String[] args) throws Exception {
-        int port = 8887; // Set your desired port
-        ChatWebSocketServer server = new ChatWebSocketServer(port);
-        server.start();
-        System.out.println("ChatWebSocketServer started on port: " + port);
+        System.out.println("WebSocket server started successfully");
     }
 }

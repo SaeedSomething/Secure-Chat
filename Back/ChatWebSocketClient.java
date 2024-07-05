@@ -72,7 +72,8 @@ public class ChatWebSocketClient extends WebSocketClient {
                 // Handle public key response
                 String publicKeyBase64 = message.split(":")[1];
                 byte[] publicKeyBytes = Base64.getDecoder().decode(publicKeyBase64);
-                PublicKey publicKey = KeyFactory.getInstance("RSA").generatePublic(new X509EncodedKeySpec(publicKeyBytes));
+                PublicKey publicKey = KeyFactory.getInstance("RSA")
+                        .generatePublic(new X509EncodedKeySpec(publicKeyBytes));
                 System.out.println("Received public key: " + publicKey);
 
                 // Example of sending a message to another client (e.g., clientB)
@@ -91,7 +92,7 @@ public class ChatWebSocketClient extends WebSocketClient {
 
                 String decryptedMessage = decrypt(encryptedMessageBase64, keyPair.getPrivate());
 
-                PublicKey senderPublicKey = ...; // Retrieve the sender's public key from some storage
+                PublicKey senderPublicKey = keyPair.getPublic(); // Retrieve the sender's public key from some storage
 
                 if (verify(decryptedMessage, signatureBase64, senderPublicKey)) {
                     System.out.println("Received message from " + fromClientId + ": " + decryptedMessage);
