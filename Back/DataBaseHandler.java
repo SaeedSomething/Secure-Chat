@@ -1,12 +1,18 @@
 import java.io.*;
 import java.sql.*;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Base64;
+import java.util.List;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
 import javax.crypto.KeyGenerator;
 import javax.crypto.SecretKey;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+
 import java.security.PublicKey;
 import java.security.spec.X509EncodedKeySpec;
 import java.util.Base64;
@@ -16,14 +22,124 @@ public class DataBaseHandler {
     static String DB_USERNAME = "postgres";
     static String DB_PASSWORD = "167294381";
 
-    // public static void main(String[] args) {
-    // try {
-    // // addUser("asd", "password124", "exampleasdasd@example.com", "127.0.0.1");
-    // System.out.println(verifyUser("asd", "password124"));
-    // } catch (Exception e) {
-    // e.printStackTrace();
-    // }
-    // }
+    public static String getUsername(int userId) throws SQLException {
+        String query = "SELECT username FROM public.\"user\" WHERE uid = ?";
+        try (Connection conn = DriverManager.getConnection(DB_URL, DB_USERNAME, DB_PASSWORD);
+                PreparedStatement stmt = conn.prepareStatement(query)) {
+            stmt.setInt(1, userId);
+            ResultSet rs = stmt.executeQuery();
+            if (rs.next()) {
+                return rs.getString("username");
+            }
+        }
+        return null; // User not found
+    }
+
+    public static int getUserId(String username) throws SQLException {
+        String query = "SELECT uid FROM public.\"user\" WHERE username = ?";
+        try (Connection conn = DriverManager.getConnection(DB_URL, DB_USERNAME, DB_PASSWORD);
+                PreparedStatement stmt = conn.prepareStatement(query)) {
+            stmt.setString(1, username);
+            ResultSet rs = stmt.executeQuery();
+            if (rs.next()) {
+                return rs.getInt("uid");
+            }
+        }
+        return -1; // User not found
+    }
+
+    public static int createChatSession(int user1Id, int user2Id) throws SQLException {
+        String query = "INSERT INTO public.\"Connection\" (\"type\", \"creation_time\", \"name\") VALUES (false, NOW(), 'P2P') RETURNING id";
+        try (Connection conn = DriverManager.getConnection(DB_URL, DB_USERNAME, DB_PASSWORD);
+                PreparedStatement stmt = conn.prepareStatement(query)) {
+            ResultSet rs = stmt.executeQuery();
+            if (rs.next()) {
+                return rs.getInt("id");
+            }
+        }
+        return -1; // Failed to create chat session
+    }
+
+    public static void addParticipant(int connectionId, int userId) throws SQLException {
+        String query = "INSERT INTO public.participants (cid, uid) VALUES (?, ?)";
+        try (Connection conn = DriverManager.getConnection(DB_URL, DB_USERNAME, DB_PASSWORD);
+                PreparedStatement stmt = conn.prepareStatement(query)) {
+            stmt.setInt(1, connectionId);
+            stmt.setInt(2, userId);
+            stmt.executeUpdate();
+        }
+    }
+
+    public static JSONArray getChatSessions(int userId) throws SQLException {
+        String query = "SELECT c.id, c.\"name\" FROM public.participants p JOIN public.\"Connection\" c ON p.cid = c.id WHERE p.uid = ?";
+        JSONArray chatSessions = new JSONArray();
+        try (Connection conn = DriverManager.getConnection(DB_URL, DB_USERNAME, DB_PASSWORD);
+                PreparedStatement stmt = conn.prepareStatement(query)) {
+            stmt.setInt(1, userId);
+            ResultSet rs = stmt.executeQuery();
+            while (rs.next()) {
+                JSONObject chatSession = new JSONObject();
+                chatSession.put("id", rs.getInt("id"));
+                chatSession.put("name", rs.getString("name"));
+                chatSessions.put(chatSession);
+            }
+        }
+        return chatSessions;
+    }
+
+    public static List<Integer> getParticipants(int connectionId) throws SQLException {
+        String query = "SELECT uid FROM public.participants WHERE cid = ?";
+        List<Integer> participantIds = new ArrayList<>();
+        try (Connection conn = DriverManager.getConnection(DB_URL, DB_USERNAME, DB_PASSWORD);
+                PreparedStatement stmt = conn.prepareStatement(query)) {
+            stmt.setInt(1, connectionId);
+            ResultSet rs = stmt.executeQuery();
+            while (rs.next()) {
+                participantIds.add(rs.getInt("uid"));
+            }
+        }
+        return participantIds;
+    }
+
+    public static void updateRolesForUsername(String username, boolean[] roles) {
+        String query = "UPDATE public.roles SET cancreategroup = ?, isadmin = ? " +
+                "WHERE rid = (SELECT rid FROM public.\"user\" WHERE username = ?)";
+
+        try (Connection conn = DriverManager.getConnection(DB_URL, DB_USERNAME, DB_PASSWORD);
+                PreparedStatement stmt = conn.prepareStatement(query)) {
+            stmt.setBoolean(1, roles[0]);
+            stmt.setBoolean(2, roles[1]);
+            stmt.setString(3, username);
+            stmt.executeUpdate();
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+    }
+
+    public static boolean[] getRolesForUsername(String username) {
+        String query = "SELECT r.cancreategroup, r.isadmin FROM public.\"user\" u " +
+                "JOIN public.roles r ON u.rid = r.rid " +
+                "WHERE u.username = ?";
+
+        try (Connection conn = DriverManager.getConnection(DB_URL, DB_USERNAME, DB_PASSWORD);
+                PreparedStatement stmt = conn.prepareStatement(query)) {
+            stmt.setString(1, username);
+            try (ResultSet rs = stmt.executeQuery()) {
+                if (rs.next()) {
+                    boolean canCreateGroup = rs.getBoolean("cancreategroup");
+                    boolean isAdmin = rs.getBoolean("isadmin");
+                    return new boolean[] { canCreateGroup, isAdmin };
+                } else {
+                    System.out.println("User not found or no roles associated with the user.");
+                    return null;
+                }
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+            return null;
+        }
+    }
+
     public static String getPublicKey(String username) throws Exception {
         Connection con = DriverManager.getConnection(DB_URL, DB_USERNAME, DB_PASSWORD);
 

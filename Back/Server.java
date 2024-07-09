@@ -21,6 +21,7 @@ import javax.crypto.KeyGenerator;
 
 import javax.crypto.SecretKey;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 public class Server {
@@ -36,6 +37,10 @@ public class Server {
         server.createContext("/signup", new SignUpHandler());
         server.createContext("/login", new LoginHandler());
         server.createContext("/getPublicKey", new PublicKeyHandler());
+        server.createContext("/modifyRoles", new ModifyRolesHandler());
+        server.createContext("/requestChatSession", new ChatSessionRequestHandler());
+        server.createContext("/getChatSessions", new GetChatSessionsHandler());
+
         server.setExecutor(null); // creates a default executor
         server.start();
         System.out.println("HTTP Server started on port 8000");
@@ -50,6 +55,150 @@ public class Server {
                 e.printStackTrace();
             }
         }).start();
+    }
+
+    static class GetChatSessionsHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if ("GET".equals(exchange.getRequestMethod())) {
+                String requestBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                JSONObject jsonRequest = new JSONObject(requestBody);
+
+                String username = jsonRequest.getString("username");
+
+                try {
+                    int userId = DataBaseHandler.getUserId(username);
+
+                    if (userId == -1) {
+                        sendResponse(exchange, 404, "User not found.");
+                        return;
+                    }
+
+                    JSONArray chatSessions = DataBaseHandler.getChatSessions(userId);
+                    sendResponse(exchange, 200, chatSessions.toString());
+                } catch (Exception e) {
+                    e.printStackTrace();
+                    sendResponse(exchange, 500, "Internal server error: " + e.getMessage());
+                }
+            } else {
+                sendResponse(exchange, 405, "Method not allowed.");
+            }
+        }
+
+        private void sendResponse(HttpExchange exchange, int statusCode, String response) throws IOException {
+            exchange.sendResponseHeaders(statusCode, response.length());
+            OutputStream os = exchange.getResponseBody();
+            os.write(response.getBytes());
+            os.close();
+        }
+    }
+
+    static class ChatSessionRequestHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if ("POST".equals(exchange.getRequestMethod())) {
+                String requestBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                JSONObject jsonRequest = new JSONObject(requestBody);
+
+                String requesterUsername = jsonRequest.getString("requesterUsername");
+                String targetUsername = jsonRequest.getString("targetUsername");
+
+                try {
+                    int requesterId = DataBaseHandler.getUserId(requesterUsername);
+                    int targetId = DataBaseHandler.getUserId(targetUsername);
+
+                    if (requesterId == -1 || targetId == -1) {
+                        sendResponse(exchange, 404, "User not found.");
+                        return;
+                    }
+
+                    // Create a new chat session
+                    int connectionId = DataBaseHandler.createChatSession(requesterId, targetId);
+
+                    // Add participants
+                    DataBaseHandler.addParticipant(connectionId, requesterId);
+                    DataBaseHandler.addParticipant(connectionId, targetId);
+
+                    JSONObject response = new JSONObject();
+                    response.put("chatSessionId", connectionId);
+                    sendResponse(exchange, 200, "Chat session created successfully.");
+                } catch (Exception e) {
+                    e.printStackTrace();
+                    sendResponse(exchange, 500, "Internal server error: " + e.getMessage());
+                }
+            } else {
+                sendResponse(exchange, 405, "Method not allowed.");
+            }
+        }
+
+        private void sendResponse(HttpExchange exchange, int statusCode, String response) throws IOException {
+            exchange.sendResponseHeaders(statusCode, response.length());
+            OutputStream os = exchange.getResponseBody();
+            os.write(response.getBytes());
+            os.close();
+        }
+
+        public static String signData(String data, PrivateKey privateKey) throws Exception {
+            Signature privateSignature = Signature.getInstance("SHA256withRSA");
+            privateSignature.initSign(privateKey);
+            privateSignature.update(data.getBytes(StandardCharsets.UTF_8));
+            byte[] signature = privateSignature.sign();
+            return Base64.getEncoder().encodeToString(signature);
+        }
+    }
+
+    static class ModifyRolesHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if ("POST".equals(exchange.getRequestMethod())) {
+                String requestBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                JSONObject jsonRequest = new JSONObject(requestBody);
+
+                String requesterUsername = jsonRequest.getString("requesterUsername");
+                String targetUsername = jsonRequest.getString("targetUsername");
+                boolean[] newRoles = jsonToBooleanArray(jsonRequest.getJSONArray("newRoles"));
+                try {
+                    if (requesterUsername == targetUsername) {
+                        throw new Exception("Can not change your own roles");
+                    }
+                    boolean[] requesterRoles = DataBaseHandler.getRolesForUsername(requesterUsername);
+                    boolean[] targetRoles = DataBaseHandler.getRolesForUsername(targetUsername);
+
+                    if (requesterRoles == null || targetRoles == null) {
+                        sendResponse(exchange, 404, "{\"message\":\"User not found.\"}");
+                        return;
+                    }
+
+                    if (requesterRoles[1]) { // If requester is admin
+                        DataBaseHandler.updateRolesForUsername(targetUsername, newRoles);
+                        sendResponse(exchange, 200, "{\"message\":\"Roles updated successfully.\"}");
+                    } else {
+                        sendResponse(exchange, 403,
+                                "{\"message\":\"Requester does not have permission to modify roles.\"}");
+                    }
+                } catch (Exception e) {
+                    e.printStackTrace();
+                    sendResponse(exchange, 500, "{\"message\":\"Internal server error: " + e.getMessage() + "\"}");
+                }
+            } else {
+                sendResponse(exchange, 405, "{\"message\":\"Method not allowed.\"}");
+            }
+        }
+
+        private void sendResponse(HttpExchange exchange, int statusCode, String response) throws IOException {
+            exchange.sendResponseHeaders(statusCode, response.length());
+            OutputStream os = exchange.getResponseBody();
+            os.write(response.getBytes());
+            os.close();
+        }
+
+        private boolean[] jsonToBooleanArray(org.json.JSONArray jsonArray) {
+            boolean[] booleanArray = new boolean[jsonArray.length()];
+            for (int i = 0; i < jsonArray.length(); i++) {
+                booleanArray[i] = jsonArray.getBoolean(i);
+            }
+            return booleanArray;
+        }
     }
 
     static class SignUpHandler implements HttpHandler {
