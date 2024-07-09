@@ -242,7 +242,7 @@ public class Server {
                 String username = null;
                 String password = null;
                 String email = null;
-                String ip = null;
+                String ip = exchange.getRemoteAddress().getAddress().getHostAddress();
                 String publicKey = null;
 
                 for (String param : params) {
@@ -257,9 +257,7 @@ public class Server {
                         case "email":
                             email = keyValue[1];
                             break;
-                        case "ip":
-                            ip = keyValue[1];
-                            break;
+
                         case "publickey":
                             publicKey = keyValue[1];
                             break;

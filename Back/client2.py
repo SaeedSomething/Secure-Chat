@@ -5,7 +5,7 @@ from Crypto.PublicKey import RSA
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives import hashes
 import base64
-
+import re
 import websocket
 import threading
 import json
@@ -16,6 +16,40 @@ WS_URL = "ws://localhost:9000"  # Your WebSocket server URL
 
 private_key = None
 clients_server_public_key = None
+
+
+def is_strong_password(password: str) -> bool:
+    """
+    Checks if the given password is strong.
+
+    A strong password:
+    - Has at least 8 characters.
+    - Contains both lowercase and uppercase characters.
+    - Includes digits.
+    - Contains special characters (e.g., @, #, $, etc.).
+
+    Args:
+    password (str): The password string to check.
+
+    Returns:
+    bool: True if the password is strong, False otherwise.
+    """
+    if len(password) < 8:
+        return False
+
+    if not re.search("[a-z]", password):
+        return False
+
+    if not re.search("[A-Z]", password):
+        return False
+
+    if not re.search("[0-9]", password):
+        return False
+
+    if not re.search("[@#$%^&+=]", password):
+        return False
+
+    return True
 
 
 # Encrypt message with private key
@@ -62,11 +96,12 @@ def signup():
         "username": username,
         "password": password,
         "email": email,
-        "ip": "127.0.0.1",
         "publickey": public_key.decode("utf-8"),
     }
 
     try:
+        if is_strong_password(password) == False:
+            raise Exception("Password not strong enough")
         print(signup_payload)
         signup_response = requests.post(f"{SERVER_URL}/signup", data=signup_payload)
         print(signup_response)
@@ -77,6 +112,8 @@ def signup():
             print(f"Sign Up Response: Error: {signup_response.text}")
 
     except requests.exceptions.RequestException as e:
+        print(f"Sign Up Response: Error: {str(e)}")
+    except Exception as e:
         print(f"Sign Up Response: Error: {str(e)}")
 
 
@@ -105,7 +142,7 @@ def login():
         return None, None
 
 
-def modify_roles(username, server_public_key):
+def modify_roles(username):
     print("--- Modify Roles ---")
     target_username = input("Enter the target username: ")
     can_create_group = input("Can create group (true/false): ")
@@ -265,7 +302,7 @@ def main():
 
         if choice == "1":
             if username:
-                modify_roles(username, server_public_key)
+                modify_roles(username)
             else:
                 signup()
         elif choice == "2":

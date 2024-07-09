@@ -2,9 +2,6 @@ import java.io.*;
 import java.sql.*;
 import java.util.*;
 import java.time.Instant;
-import java.util.ArrayList;
-import java.util.Base64;
-import java.util.List;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
@@ -16,12 +13,20 @@ import org.json.JSONObject;
 
 import java.security.PublicKey;
 import java.security.spec.X509EncodedKeySpec;
-import java.util.Base64;
 
 public class DataBaseHandler {
     static String DB_URL = "jdbc:postgresql://localhost:5432/postgres";
-    static String DB_USERNAME = "postgres";
-    static String DB_PASSWORD = "167294381";
+
+    static String DB_USERNAME ;
+    static String DB_PASSWORD ;
+    static {
+        DB_USERNAME = System.getenv("DB_USERNAME");
+        DB_PASSWORD = System.getenv("DB_PASSWORD");
+
+        if (DB_USERNAME == null || DB_PASSWORD == null) {
+            throw new RuntimeException("Database credentials are not set in environment variables.");
+        }
+    }
 
     public static String getUsername(int userId) throws SQLException {
         String query = "SELECT username FROM public.\"user\" WHERE uid = ?";
