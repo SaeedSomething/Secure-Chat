@@ -30,6 +30,19 @@ def decrypt_with_public_key(public_key, encrypted_message: str) -> str:
     return decrypted.decode()
 
 
+# Encrypt message with private key
+def encrypt_with_private_key(private_key, message: str) -> str:
+    encrypted = private_key.sign(message.encode(), padding.PKCS1v15(), hashes.SHA256())
+    return base64.b64encode(encrypted).decode()
+
+
+# Decrypt message with public key
+def decrypt_with_public_key(public_key, encrypted_message: str) -> str:
+    encrypted_data = base64.b64decode(encrypted_message)
+    decrypted = public_key.verify(encrypted_data, padding.PKCS1v15(), hashes.SHA256())
+    return decrypted.decode()
+
+
 def signup():
     print("--- Sign Up ---")
     username = input("Enter username: ")
