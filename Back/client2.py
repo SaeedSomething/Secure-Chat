@@ -88,8 +88,7 @@ def signup():
     key = RSA.generate(2048)
     private_key = key.export_key()
     public_key = key.publickey().export_key()
-
-    with open(f"{username}_private.pem", "wb") as priv_file:
+    with open(f"pv\\{username}_private.pem", "wb") as priv_file:
         priv_file.write(private_key)
 
     signup_payload = {
@@ -131,6 +130,8 @@ def login():
             response_data = login_response.json()
             server_public_key_pem = response_data["serverPublicKey"]
             server_public_key = RSA.import_key(b64decode(server_public_key_pem))
+            with open(f"pv\\{username}_private.pem", "rb") as priv_file:
+                priv_file.read(private_key)
             print(f"Login successful. Server Public Key: {server_public_key_pem}")
             return username, server_public_key
         else:
