@@ -3,20 +3,20 @@ import org.java_websocket.WebSocket;
 import org.java_websocket.handshake.ClientHandshake;
 
 import java.net.InetSocketAddress;
-import java.nio.ByteBuffer;
-import java.security.*;
-import java.security.spec.X509EncodedKeySpec;
-import java.sql.SQLException;
-
-import javax.crypto.Cipher;
-import java.util.Base64;
-import java.util.List;
+import java.util.Collections;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+
+import org.json.JSONException;
+import org.json.JSONObject;
 
 public class ChatWebSocketServer extends WebSocketServer {
 
-    private static final int KEY_SIZE = 2048;
-    private ConcurrentHashMap<String, WebSocket> userConnections = new ConcurrentHashMap<>();
+    // A map to keep track of chat session participants
+    private static Map<Integer, Set<WebSocket>> chatSessions = new ConcurrentHashMap<>();
+    // A map to keep track of which chat session a WebSocket connection belongs to
+    private static Map<WebSocket, Integer> connectionChatSessionMap = new ConcurrentHashMap<>();
 
     public ChatWebSocketServer(int port) {
         super(new InetSocketAddress(port));
@@ -24,53 +24,47 @@ public class ChatWebSocketServer extends WebSocketServer {
 
     @Override
     public void onOpen(WebSocket conn, ClientHandshake handshake) {
-        System.out.println("New connection: " + conn.getRemoteSocketAddress());
-        // You can add code to authenticate the user here if needed
+        System.out.println("New connection from " + conn.getRemoteSocketAddress());
+        
     }
 
     @Override
     public void onClose(WebSocket conn, int code, String reason, boolean remote) {
-        System.out.println("Closed connection: " + conn.getRemoteSocketAddress());
-        userConnections.values().remove(conn);
+        System.out.println("Closed connection to " + conn.getRemoteSocketAddress());
+        // Remove the connection from all chat sessions it was a part of
+        Integer sessionId = connectionChatSessionMap.remove(conn);
+        if (sessionId != null) {
+            Set<WebSocket> participants = chatSessions.get(sessionId);
+            if (participants != null) {
+                participants.remove(conn);
+                if (participants.isEmpty()) {
+                    chatSessions.remove(sessionId);
+                }
+            }
+        }
     }
 
     @Override
     public void onMessage(WebSocket conn, String message) {
-        System.out.println("Message from " + conn.getRemoteSocketAddress() + ": " + message);
+        try {
+            JSONObject jsonMessage = new JSONObject(message);
+            String type = jsonMessage.getString("type");
 
-        if (message.startsWith("REGISTER:")) {
-            String username = message.substring("REGISTER:".length());
-            userConnections.put(username, conn);
-        } else if (message.startsWith("REQUEST_PUBLIC_KEY:")) {
-            String username = message.substring("REQUEST_PUBLIC_KEY:".length());
-            try {
-                String publicKey = DataBaseHandler.getPublicKey(username);
-                if (publicKey != null) {
-                    String signedPublicKey = Server.signData(publicKey, Server.serverKeyPair.getPrivate());
-                    conn.send("PUBLIC_KEY:" + publicKey + "." + signedPublicKey);
-                } else {
-                    conn.send("ERROR: User not found");
-                }
-            } catch (Exception e) {
-                conn.send("ERROR: " + e.getMessage());
-            }
-        } else if (message.startsWith("MESSAGE:")) {
-            String[] parts = message.split(":", 3);
-            int connectionId = Integer.parseInt(parts[1]);
-            String encryptedMessage = parts[2];
+            if ("chat".equals(type)) {
+                int connectionId = jsonMessage.getInt("connectionId"); // Use connectionId instead of sessionId
+                String chatMessage = jsonMessage.getString("message");
 
-            try {
-                List<Integer> participantIds = DataBaseHandler.getParticipants(connectionId);
-                for (Integer userId : participantIds) {
-                    String username = DataBaseHandler.getUsername(userId);
-                    WebSocket client = userConnections.get(username);
-                    if (client != null && client != conn) {
-                        client.send("MESSAGE:" + connectionId + ":" + encryptedMessage);
-                    }
-                }
-            } catch (SQLException e) {
-                e.printStackTrace();
+                // Relay the message to the appropriate chat session
+                sendMessageToChatSession(connectionId, chatMessage, conn);
+            } else if ("join".equals(type)) {
+                int connectionId = jsonMessage.getInt("connectionId");
+                addParticipantToChatSession(connectionId, conn);
+            } else {
+                System.out.println("Unknown message type: " + type);
             }
+        } catch (JSONException e) {
+            e.printStackTrace();
+            System.out.println("Invalid message format: " + message);
         }
     }
 
@@ -81,6 +75,27 @@ public class ChatWebSocketServer extends WebSocketServer {
 
     @Override
     public void onStart() {
-        System.out.println("WebSocket server started successfully");
+        System.out.println("WebSocket Server started!");
+    }
+
+    public void addParticipantToChatSession(int sessionId, WebSocket conn) {
+        chatSessions.putIfAbsent(sessionId, Collections.newSetFromMap(new ConcurrentHashMap<>()));
+        chatSessions.get(sessionId).add(conn);
+        connectionChatSessionMap.put(conn, sessionId);
+        System.out.println("Added participant to chat session: " + sessionId);
+    }
+
+    public void sendMessageToChatSession(int sessionId, String message) {
+        sendMessageToChatSession(sessionId, message, null);
+    }
+
+    public void sendMessageToChatSession(int sessionId, String message, WebSocket sender) {
+        if (chatSessions.containsKey(sessionId)) {
+            for (WebSocket conn : chatSessions.get(sessionId)) {
+                if (conn != sender) {
+                    conn.send(message);
+                }
+            }
+        }
     }
 }

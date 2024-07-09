@@ -2,9 +2,32 @@ import requests
 import json
 from base64 import b64encode, b64decode
 from Crypto.PublicKey import RSA
-from Crypto.Cipher import PKCS1_OAEP
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives import hashes
+import base64
 
-SERVER_URL = "http://localhost:8000"
+import websocket
+import threading
+import json
+import requests
+
+SERVER_URL = "http://localhost:8000"  # Your HTTP server URL
+WS_URL = "ws://localhost:9000"  # Your WebSocket server URL
+
+private_key = None
+
+
+# Encrypt message with private key
+def encrypt_with_private_key(private_key, message: str) -> str:
+    encrypted = private_key.sign(message.encode(), padding.PKCS1v15(), hashes.SHA256())
+    return base64.b64encode(encrypted).decode()
+
+
+# Decrypt message with public key
+def decrypt_with_public_key(public_key, encrypted_message: str) -> str:
+    encrypted_data = base64.b64decode(encrypted_message)
+    decrypted = public_key.verify(encrypted_data, padding.PKCS1v15(), hashes.SHA256())
+    return decrypted.decode()
 
 
 def signup():
@@ -32,10 +55,10 @@ def signup():
     try:
         print(signup_payload)
         signup_response = requests.post(f"{SERVER_URL}/signup", data=signup_payload)
-
+        print(signup_response)
         if signup_response.status_code == 200:
-            response_data = signup_response.json()
-            print(f"Sign Up Response: {response_data['message']}")
+
+            print(f"Sign Up Response: {signup_response}")
         else:
             print(f"Sign Up Response: Error: {signup_response.text}")
 
@@ -111,8 +134,8 @@ def connect_to_user(username):
         )
 
         if connect_response.status_code == 200:
-            response_data = connect_response.json()
-            print(f"Connect Response: {response_data['message']}")
+            # response_data = connect_response.json()
+            print(f"Connect Response: {connect_response}")
         else:
             print(f"Connect Response: Error: {connect_response.text}")
 
@@ -138,7 +161,9 @@ def see_connections(username):
 
             print("Connections:")
             for idx, connection in enumerate(response_data):
-                print(f"{idx + 1}. {connection['name']} (ID: {connection['id']})")
+                print(
+                    f"{idx + 1}. {connection['name']} (ID: {connection['id']} (Participants : {connection['participants']}))"
+                )
 
             choice = int(input("Enter the connection number to connect to: ")) - 1
             if 0 <= choice < len(response_data):
@@ -155,52 +180,52 @@ def see_connections(username):
         print(f"See Connections Response: Error: {str(e)}")
 
 
-def chat(username, connection_id):
-    print(f"--- Chat with Connection ID: {connection_id} ---")
+def on_message(ws, message):
+    print(message)
 
-    while True:
-        message = input("Enter message (or 'exit' to exit): ")
-        if message.lower() == "exit":
-            break
 
+def on_error(ws, error):
+    print(f"WebSocket Error: {error}")
+
+
+def on_close(ws):
+    print("WebSocket connection closed")
+
+
+def on_open(ws, username, connection_id):
+    def run(*args):
         chat_payload = {
             "username": username,
             "connectionId": connection_id,
-            "message": message,
+            "message": "join",
+            "type": "join",
         }
+        ws.send(json.dumps(chat_payload))
+        while True:
+            message = input("Enter message (or 'exit' to exit): ")
+            if message.lower() == "exit":
+                ws.close()
+                break
 
-        try:
-            chat_response = requests.post(
-                f"{SERVER_URL}/sendMessage", data=chat_payload
-            )
+            chat_payload = {
+                "username": username,
+                "connectionId": connection_id,
+                "message": message,
+                "type": "chat",
+            }
+            ws.send(json.dumps(chat_payload))
 
-            if chat_response.status_code == 200:
-                print("Message sent successfully.")
-            else:
-                print(f"Send Message Response: Error: {chat_response.text}")
+    threading.Thread(target=run).start()
 
-        except requests.exceptions.RequestException as e:
-            print(f"Send Message Response: Error: {str(e)}")
 
-        # Fetch incoming messages
-        try:
-            messages_response = requests.get(
-                f"{SERVER_URL}/getMessages/{connection_id}"
-            )
+def chat(username, connection_id):
+    print(f"--- Chat with Connection ID: {connection_id} ---")
 
-            if messages_response.status_code == 200:
-                response_data = messages_response.json()
-                messages = response_data["messages"]
-                print("--- Incoming Messages ---")
-                for msg in messages:
-                    print(f"{msg['sender']}: {msg['content']}")
-            else:
-                print(f"Get Messages Response: Error: {messages_response.text}")
-
-        except requests.exceptions.RequestException as e:
-            print(f"Get Messages Response: Error: {str(e)}")
-        except json.JSONDecodeError as e:
-            print(f"Get Messages Response: Error: {str(e)}")
+    ws = websocket.WebSocketApp(
+        WS_URL, on_message=on_message, on_error=on_error, on_close=on_close
+    )
+    ws.on_open = lambda ws: on_open(ws, username, connection_id)
+    ws.run_forever()
 
 
 def main():

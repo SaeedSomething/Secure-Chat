@@ -10,12 +10,11 @@ import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
-import java.security.KeyPair;
-import java.security.KeyPairGenerator;
-import java.security.PrivateKey;
-import java.security.PublicKey;
-import java.security.Signature;
+import java.security.*;
+import java.security.spec.PKCS8EncodedKeySpec;
+import java.security.spec.X509EncodedKeySpec;
 import java.util.Base64;
+import javax.crypto.Cipher;
 
 import javax.crypto.KeyGenerator;
 
@@ -26,6 +25,7 @@ import org.json.JSONObject;
 
 public class Server {
     public static KeyPair serverKeyPair;
+    static ChatWebSocketServer wsServer = new ChatWebSocketServer(9000);
 
     public static void main(String[] args) throws Exception {
         // Generate server key pair
@@ -40,21 +40,49 @@ public class Server {
         server.createContext("/modifyRoles", new ModifyRolesHandler());
         server.createContext("/requestChatSession", new ChatSessionRequestHandler());
         server.createContext("/getChatSessions", new GetChatSessionsHandler());
+        server.createContext("/sendMessage", new SendMessageHandler());
 
         server.setExecutor(null); // creates a default executor
         server.start();
         System.out.println("HTTP Server started on port 8000");
-
-        // Start WebSocket server on a separate thread
         new Thread(() -> {
             try {
-                ChatWebSocketServer wsServer = new ChatWebSocketServer(9000);
-                wsServer.start();
+                Server.wsServer.start();
                 System.out.println("WebSocket Server started on port 9000");
             } catch (Exception e) {
                 e.printStackTrace();
             }
         }).start();
+    }
+
+    static class SendMessageHandler implements HttpHandler {
+        @Override
+        public void handle(HttpExchange exchange) throws IOException {
+            if ("POST".equals(exchange.getRequestMethod())) {
+                String requestBody = new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+                JSONObject jsonRequest = new JSONObject(requestBody);
+
+                int chatSessionId = jsonRequest.getInt("chatSessionId");
+                String message = jsonRequest.getString("message");
+
+                try {
+                    Server.wsServer.sendMessageToChatSession(chatSessionId, message);
+                    sendResponse(exchange, 200, "Message sent successfully.");
+                } catch (Exception e) {
+                    e.printStackTrace();
+                    sendResponse(exchange, 500, "Internal server error: " + e.getMessage());
+                }
+            } else {
+                sendResponse(exchange, 405, "Method not allowed.");
+            }
+        }
+
+        private void sendResponse(HttpExchange exchange, int statusCode, String response) throws IOException {
+            exchange.sendResponseHeaders(statusCode, response.length());
+            OutputStream os = exchange.getResponseBody();
+            os.write(response.getBytes());
+            os.close();
+        }
     }
 
     static class GetChatSessionsHandler implements HttpHandler {
@@ -111,7 +139,10 @@ public class Server {
                         sendResponse(exchange, 404, "User not found.");
                         return;
                     }
-
+                    if (requesterId == targetId) {
+                        sendResponse(exchange, 404, "User not found.");
+                        return;
+                    }
                     // Create a new chat session
                     int connectionId = DataBaseHandler.createChatSession(requesterId, targetId);
 
@@ -325,6 +356,7 @@ public class Server {
                 exchange.sendResponseHeaders(405, -1); // Method not allowed
             }
         }
+
     }
 
     public static String signData(String data, PrivateKey privateKey) throws Exception {
@@ -396,5 +428,53 @@ public class Server {
                 exchange.sendResponseHeaders(405, -1); // Method not allowed
             }
         }
+    }
+
+    // Method to encrypt with private key
+    public static String encryptWithPrivateKey(String privateKeyPEM, String message) throws Exception {
+        // Remove the first and last lines
+        String privateKeyPEMStripped = privateKeyPEM
+                .replace("-----BEGIN RSA PRIVATE KEY-----", "")
+                .replace("-----END RSA PRIVATE KEY-----", "")
+                .replaceAll("\\s+", "");
+
+        // Decode the Base64 encoded key
+        byte[] encodedPrivateKey = Base64.getDecoder().decode(privateKeyPEMStripped);
+
+        // Reconstruct the private key
+        PKCS8EncodedKeySpec keySpec = new PKCS8EncodedKeySpec(encodedPrivateKey);
+        KeyFactory keyFactory = KeyFactory.getInstance("RSA");
+        PrivateKey privateKey = keyFactory.generatePrivate(keySpec);
+
+        // Encrypt the message
+        Cipher cipher = Cipher.getInstance("RSA");
+        cipher.init(Cipher.ENCRYPT_MODE, privateKey);
+        byte[] encryptedBytes = cipher.doFinal(message.getBytes());
+
+        return Base64.getEncoder().encodeToString(encryptedBytes);
+    }
+
+    // Method to decrypt with public key
+    public static String decryptWithPublicKey(String publicKeyPEM, String encryptedMessage) throws Exception {
+        // Remove the first and last lines
+        String publicKeyPEMStripped = publicKeyPEM
+                .replace("-----BEGIN RSA PUBLIC KEY-----", "")
+                .replace("-----END RSA PUBLIC KEY-----", "")
+                .replaceAll("\\s+", "");
+
+        // Decode the Base64 encoded key
+        byte[] encodedPublicKey = Base64.getDecoder().decode(publicKeyPEMStripped);
+
+        // Reconstruct the public key
+        X509EncodedKeySpec keySpec = new X509EncodedKeySpec(encodedPublicKey);
+        KeyFactory keyFactory = KeyFactory.getInstance("RSA");
+        PublicKey publicKey = keyFactory.generatePublic(keySpec);
+
+        // Decrypt the message
+        Cipher cipher = Cipher.getInstance("RSA");
+        cipher.init(Cipher.DECRYPT_MODE, publicKey);
+        byte[] decryptedBytes = cipher.doFinal(Base64.getDecoder().decode(encryptedMessage));
+
+        return new String(decryptedBytes);
     }
 }

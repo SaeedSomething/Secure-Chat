@@ -1,5 +1,6 @@
 import java.io.*;
 import java.sql.*;
+import java.util.*;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
@@ -71,19 +72,50 @@ public class DataBaseHandler {
     }
 
     public static JSONArray getChatSessions(int userId) throws SQLException {
-        String query = "SELECT c.id, c.\"name\" FROM public.participants p JOIN public.\"Connection\" c ON p.cid = c.id WHERE p.uid = ?";
+        String query = """
+                    SELECT c.id, c.\"name\", u.username
+                    FROM public.participants p
+                    JOIN public.\"Connection\" c ON p.cid = c.id
+                    JOIN public.\"user\" u ON p.uid = u.uid
+                    WHERE p.cid IN (
+                        SELECT cid FROM public.participants WHERE uid = ?
+                    )
+                """;
+
         JSONArray chatSessions = new JSONArray();
         try (Connection conn = DriverManager.getConnection(DB_URL, DB_USERNAME, DB_PASSWORD);
                 PreparedStatement stmt = conn.prepareStatement(query)) {
             stmt.setInt(1, userId);
             ResultSet rs = stmt.executeQuery();
+
+            // This map will hold chat session details, where the key is the chat session ID
+            Map<Integer, JSONObject> chatSessionMap = new HashMap<>();
+
             while (rs.next()) {
-                JSONObject chatSession = new JSONObject();
-                chatSession.put("id", rs.getInt("id"));
-                chatSession.put("name", rs.getString("name"));
+                int chatSessionId = rs.getInt("id");
+                String chatSessionName = rs.getString("name");
+                String participantUsername = rs.getString("username");
+
+                // If the chat session is not already in the map, add it
+                if (!chatSessionMap.containsKey(chatSessionId)) {
+                    JSONObject chatSession = new JSONObject();
+                    chatSession.put("id", chatSessionId);
+                    chatSession.put("name", chatSessionName);
+                    chatSession.put("participants", new JSONArray());
+                    chatSessionMap.put(chatSessionId, chatSession);
+                }
+
+                // Add the participant username to the chat session
+                JSONObject chatSession = chatSessionMap.get(chatSessionId);
+                chatSession.getJSONArray("participants").put(participantUsername);
+            }
+
+            // Add all chat sessions to the final JSON array
+            for (JSONObject chatSession : chatSessionMap.values()) {
                 chatSessions.put(chatSession);
             }
         }
+
         return chatSessions;
     }
 
