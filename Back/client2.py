@@ -15,6 +15,7 @@ SERVER_URL = "http://localhost:8000"  # Your HTTP server URL
 WS_URL = "ws://localhost:9000"  # Your WebSocket server URL
 
 private_key = None
+clients_server_public_key = None
 
 
 # Encrypt message with private key
@@ -233,7 +234,9 @@ def on_open(ws, username, connection_id):
 
 def chat(username, connection_id):
     print(f"--- Chat with Connection ID: {connection_id} ---")
-
+    pk_payload = {"username": username}
+    pk_response = requests.post(f"{SERVER_URL}/getPublicKey", data=pk_payload)
+    target_pk = decrypt_with_public_key(clients_server_public_key, pk_response)
     ws = websocket.WebSocketApp(
         WS_URL, on_message=on_message, on_error=on_error, on_close=on_close
     )
@@ -245,8 +248,7 @@ def main():
     print("Welcome to Secure Messaging App")
 
     username = None
-    server_public_key = None
-
+    target_pk = None
     while True:
         print("\nOptions:")
         if username:
@@ -270,7 +272,7 @@ def main():
             if username:
                 connect_to_user(username)
             else:
-                username, server_public_key = login()
+                username, clients_server_public_key = login()
                 if username:
                     print(f"Logged in as {username}")
         elif choice == "3" and username:
